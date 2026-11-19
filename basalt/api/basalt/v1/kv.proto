@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package basalt.v1;
+
+option go_package = "github.com/naman/basalt/api/basalt/v1;basaltv1";
+
+// KVService is the client-facing surface of a Basalt node. Get carries explicit
+// found semantics — an absent key is not an error. Scan streams batches of
+// pairs for the half-open range [start, end).
+service KVService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Scan(ScanRequest) returns (stream ScanResponse);
+}
+
+// RaftService carries consensus messages between cluster nodes. Step
+// delivers one raft message; the transport is unary and idempotent-safe
+// (raft tolerates dropped, duplicated, and reordered messages).
+service RaftService {
+  rpc Step(StepRequest) returns (StepResponse);
+  // InstallSnapshot streams a leader's engine checkpoint to a follower whose
+  // next entry has been compacted away, so it can rejoin from the boundary.
+  rpc InstallSnapshot(stream InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}
+
+message StepRequest {
+  RaftMessage message = 1;
+}
+
+message RaftMessage {
+  uint64 group = 10;
+  uint64 type = 1;
+  uint64 from = 2;
+  uint64 to = 3;
+  uint64 term = 4;
+  uint64 log_index = 5;
+  uint64 log_term = 6;
+  uint64 commit = 7;
+  bool reject = 8;
+  repeated RaftEntry entries = 9;
+}
+
+message RaftEntry {
+  uint64 index = 1;
+  uint64 term = 2;
+  bytes data = 3;
+  uint64 type = 4;
+}
+
+message StepResponse {}
+
+message InstallSnapshotRequest {
+  uint64 group = 1;      // raft group being installed
+  uint64 term = 2;       // leader term (bumps the follower's term/vote)
+  uint64 snap_index = 3; // snapshot boundary
+  uint64 snap_term = 4;
+  string file = 5; // path relative to the checkpoint root
+  bytes data = 6;  // next chunk of that file
+}
+message InstallSnapshotResponse {}
+
+// ShardService distributes the versioned shard map and bootstraps groups at
+// runtime.
+service ShardService {
+  rpc UpdateShardMap(UpdateShardMapRequest) returns (UpdateShardMapResponse);
+  rpc GetShardMap(GetShardMapRequest) returns (GetShardMapResponse);
+  rpc AddGroup(AddGroupRequest) returns (AddGroupResponse);
+}
+
+message UpdateShardMapRequest {
+  bytes map = 1; // marshaled ShardMap
+}
+message UpdateShardMapResponse {
+  bool accepted = 1; // false if the node already has an equal-or-higher epoch
+  uint64 epoch = 2;  // the node's epoch after the call
+}
+message GetShardMapRequest {}
+message GetShardMapResponse {
+  bytes map = 1;
+}
+message AddGroupRequest {
+  uint64 group = 1;
+}
+message AddGroupResponse {}
+
+message GetRequest {
+  bytes key = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  bytes value = 2;
+}
+
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message PutResponse {}
+
+message DeleteRequest {
+  bytes key = 1;
+}
+
+message DeleteResponse {}
+
+message ScanRequest {
+  // start is inclusive; empty means the first key.
+  bytes start = 1;
+  // end is exclusive; empty means past the last key.
+  bytes end = 2;
+  // limit caps the total pairs returned; zero means unlimited.
+  uint64 limit = 3;
+  // group, when non-zero, asks the addressed node to scan exactly that
+  // raft group (an internal scatter-gather leg); zero is a client-facing
+  // scan that the front door fans out across every group.
+  uint64 group = 4;
+}
+
+message ScanResponse {
+  repeated KeyValue pairs = 1;
+}
+
+message KeyValue {
+  bytes key = 1;
+  bytes value = 2;
+}
